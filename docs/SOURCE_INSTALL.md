@@ -13,13 +13,13 @@ acquire or build an engine. Check [model requirements](MODELS.md) before downloa
 | --- | --- |
 | Windows | `START-HERE.bat` ([steps](#from-source-windows)) |
 | Linux | `./setup.sh` ([steps](#from-source-linux)) |
-| Mac (Apple Silicon) | `./setup.sh` ([steps](#from-source-mac)) |
+| Mac (Apple Silicon, or an Intel Mac with a Metal 3 AMD card) | `./setup.sh` ([steps](#from-source-mac)) |
 | A source build to test a change | `./setup.sh --build --no-start` ([steps](#build-from-git-on-linux-to-try-a-pull-request-or-change-the-code)) |
 | An update | `UPDATE.bat` or `./update.sh` ([steps](#updating)) |
 
 ## From source: Windows
 
-1. Clone the [repository](https://github.com/Niko1221/Strata) or download and extract its source archive.
+1. Clone the [repository](https://github.com/j4ckzh0u/Strata) or download and extract its source archive.
 2. Open the source folder and run `START-HERE.bat`.
 3. Choose a supported model, storage folder and settings. Keep the window open while setup works.
 
@@ -55,7 +55,7 @@ nix develop -c ./setup.sh
 ### Build from git on Linux (to try a pull request or change the code)
 
 ```bash
-git clone https://github.com/Niko1221/Strata.git
+git clone https://github.com/j4ckzh0u/Strata.git
 cd Strata
 ./setup.sh --build --no-start
 ```
@@ -84,7 +84,8 @@ STRATA_PYTHON="$PWD/.venv/bin/python3" bin/strata monitor --url http://127.0.0.1
 
 ## From source: Mac
 
-Use an Apple Silicon Mac with macOS 15 or newer. Install Apple's Command Line Tools once:
+Use an Apple Silicon Mac, or an Intel Mac with a Metal 3 AMD card (a Radeon Pro), with macOS 15 or newer. On an Intel Mac the
+engine is built for x86_64; the ready-made Mac engine is Apple Silicon only. Install Apple's Command Line Tools once:
 
 ```bash
 xcode-select --install

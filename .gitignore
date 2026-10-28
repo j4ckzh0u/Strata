@@ -85,3 +85,6 @@ node_modules/
 # screenshots and checkpoints from the Mac rebuild live outside git (StrataSplit\evidence-archive)
 /apps/host/docs/evidence/
 /apps/host/docs/checkpoints/
+
+# local model files and scratch data of a Mac bring-up (models, packs, build logs): never in git
+/Strata-data/

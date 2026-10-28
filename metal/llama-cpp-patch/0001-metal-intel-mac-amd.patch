@@ -1,0 +1,127 @@
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -2167,6 +2167,35 @@
+     return res;
+ }
+ 
++// GGML_METAL_WEIGHTS_VRAM=1: copy the mmapped weights into a StorageModePrivate buffer (VRAM) instead of wrapping the
++// system-memory pages.  On an Intel Mac's discrete AMD card (no unified memory) the shared wrapper makes every decode
++// step read the weights over PCIe (~1.5 GB/s, measured on a Radeon Pro 5500M); the private copy lives in VRAM and is read
++// at the card's own bandwidth.  The copy is a one-time blit at load; a model larger than one buffer is chunked like the
++// shared path.  Compute/KV buffers keep their own storage mode (GGML_METAL_SHARED_BUFFERS_*).
++static id<MTLBuffer> ggml_metal_buffer_vram_copy(ggml_metal_device_t dev, const void * src, size_t size, size_t size_aligned) {
++    id<MTLBuffer> dst = [dev->mtl_device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
++    if (dst == nil) {
++        return nil;
++    }
++    id<MTLBuffer> stage = [dev->mtl_device newBufferWithBytes:src length:size options:MTLResourceStorageModeShared];
++    if (stage == nil) {
++#if !__has_feature(objc_arc)
++        [dst release];
++#endif
++        return nil;
++    }
++    id<MTLCommandBuffer> cmd_buf = [dev->mtl_queue commandBuffer];
++    id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
++    [encoder copyFromBuffer:stage sourceOffset:0 toBuffer:dst destinationOffset:0 size:size];
++    [encoder endEncoding];
++    [cmd_buf commit];
++    [cmd_buf waitUntilCompleted];
++#if !__has_feature(objc_arc)
++    [stage release];
++#endif
++    return dst;
++}
++
+ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, size_t size, size_t max_tensor_size) {
+     ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
+ 
+@@ -2175,7 +2204,8 @@
+     res->all_data = ptr;
+     res->all_size = size;
+ 
+-    res->is_shared = true;
++    const bool weights_vram = getenv("GGML_METAL_WEIGHTS_VRAM") != NULL;
++    res->is_shared = !weights_vram;
+     res->owned = false;
+ 
+     res->n_buffers = 0;
+@@ -2203,7 +2233,9 @@
+         res->buffers[res->n_buffers].metal = nil;
+ 
+         if (size_aligned > 0) {
+-            res->buffers[res->n_buffers].metal = [res->dev->mtl_device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
++            res->buffers[res->n_buffers].metal = weights_vram
++                ? ggml_metal_buffer_vram_copy(dev, ptr, size, size_aligned)
++                : [res->dev->mtl_device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
+ 
+             if (res->buffers[res->n_buffers].metal == nil) {
+                 GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_aligned / 1024.0 / 1024.0);
+@@ -2230,7 +2262,10 @@
+             res->buffers[res->n_buffers].metal = nil;
+ 
+             if (size_step_aligned > 0) {
+-                res->buffers[res->n_buffers].metal = [res->dev->mtl_device newBufferWithBytesNoCopy:(void *) ((uint8_t *) ptr + i) length:size_step_aligned options:MTLResourceStorageModeShared deallocator:nil];
++                const size_t n = size_step_aligned < size - i ? size_step_aligned : size - i;
++                res->buffers[res->n_buffers].metal = weights_vram
++                    ? ggml_metal_buffer_vram_copy(dev, (const uint8_t *) ptr + i, n, size_step_aligned)
++                    : [res->dev->mtl_device newBufferWithBytesNoCopy:(void *) ((uint8_t *) ptr + i) length:size_step_aligned options:MTLResourceStorageModeShared deallocator:nil];
+ 
+                 if (res->buffers[res->n_buffers].metal == nil) {
+                     GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_step_aligned / 1024.0 / 1024.0);
+@@ -2329,10 +2364,24 @@
+     @autoreleasepool {
+         // src
+         void * data_ptr = (void *)(uintptr_t) data; // "const cast" the src data
+-        id<MTLBuffer> buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr
+-                                                               length:size
+-                                                              options:MTLResourceStorageModeShared
+-                                                          deallocator:nil];
++        // newBufferWithBytesNoCopy needs a page-aligned pointer: a batch's token data is not, and on a discrete GPU
++        // (private buffers, no unified memory) that returned nil and aborted.  Stage unaligned data in a page-aligned
++        // copy instead.
++        void * stage = NULL;
++        size_t stage_size = size;
++        id<MTLBuffer> buf_src = nil;
++        const size_t page = (size_t) sysconf(_SC_PAGESIZE);
++        if (((uintptr_t) data_ptr % page) == 0) {
++            buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr length:size options:MTLResourceStorageModeShared deallocator:nil];
++        }
++        if (buf_src == nil) {
++            stage_size = (size + page - 1) / page * page;
++            if (posix_memalign(&stage, page, stage_size) != 0) {
++                GGML_ABORT("%s: cannot allocate a page-aligned staging buffer (%zu bytes)\n", __func__, stage_size);
++            }
++            memcpy(stage, data_ptr, size);
++            buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:stage length:stage_size options:MTLResourceStorageModeShared deallocator:nil];
++        }
+ 
+         GGML_ASSERT(buf_src);
+ 
+@@ -2369,6 +2418,9 @@
+ 
+         dispatch_semaphore_wait(completion_semaphore, DISPATCH_TIME_FOREVER);
+         dispatch_release(completion_semaphore);
++        if (stage != NULL) {
++            free(stage);
++        }
+ 
+         //[cmd_buf waitUntilCompleted];
+     }
+--- a/ggml/src/ggml-metal/ggml-metal.cpp
++++ b/ggml/src/ggml-metal/ggml-metal.cpp
+@@ -740,8 +740,12 @@
+     ggml_metal_buffer_t res = ggml_metal_buffer_map(ctx_dev, ptr, size, max_tensor_size);
+ 
+     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx_dev);
+-
+-    return ggml_backend_buffer_init(ggml_backend_metal_buffer_type_mapped(props_dev->device), ggml_backend_metal_buffer_shared_i, res, size);
++    // GGML_METAL_WEIGHTS_VRAM: ggml_metal_buffer_map may hold the data in a private (VRAM) buffer; the interface must
++    // match it, not always be the shared one (which asserts on a private buffer).
++    const ggml_backend_buffer_i buf_i = ggml_metal_buffer_is_shared(res)
++        ? ggml_backend_metal_buffer_shared_i
++        : ggml_backend_metal_buffer_private_i;
++    return ggml_backend_buffer_init(ggml_backend_metal_buffer_type_mapped(props_dev->device), buf_i, res, size);
+ }
+ 
+ static bool ggml_backend_metal_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {

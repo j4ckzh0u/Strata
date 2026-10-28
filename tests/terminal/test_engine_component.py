@@ -123,11 +123,11 @@ class Resolution(unittest.TestCase):
         self.assertIn("is a hip engine, this PC needs cuda", str(caught.exception))
 
     def test_an_unqualified_combination_is_not_attempted(self):
-        if HERE == "macos-arm64":
-            self.skipTest("metal is supported here")
-        make_package(self.root, backend="metal")                 # metal is macOS arm64 only
+        target = next(p for p in ("windows-x86_64", "linux-x86_64", "macos-arm64", "macos-x86_64")
+                      if not ec.backend_supported("sycl", p)[0])      # sycl is Linux only; metal is macOS only
+        make_package(self.root, backend="sycl", platform=target)
         with self.assertRaises(ec.EngineMissing) as caught:
-            ec.resolve(self.root, backend="metal", target=HERE)
+            ec.resolve(self.root, backend="sycl", target=target)
         self.assertIn("not a supported combination", str(caught.exception))
 
     def test_runtime_too_old_is_refused(self):
@@ -326,7 +326,7 @@ class WrongCardFamily(unittest.TestCase):
         with mock.patch.object(ec, "hip_archs_present", return_value=[]):
             note = ec.status(self.root, backend="cuda")["notice"]
         self.assertTrue(note.startswith("This Strata is for AMD RX 9000 cards. Your PC has an NVIDIA card: download the NVIDIA version from "), note)
-        self.assertIn("https://github.com/Niko1221/Strata/releases", note)
+        self.assertIn("https://github.com/j4ckzh0u/Strata/releases", note)
 
     def test_the_matching_family_is_not_blocked(self):
         with mock.patch.object(ec, "hip_archs_present", return_value=["gfx1201"]):

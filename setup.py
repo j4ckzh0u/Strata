@@ -225,12 +225,12 @@ LLAMA_CPP_ZIP = f"https://github.com/ggml-org/llama.cpp/archive/{LLAMA_CPP_COMMI
 # "https://github.com/<you>/Strata/releases/latest/download/" (or pass --prebuilt / set STRATA_PREBUILT_URL).
 # With the default, the release of this checkout's own version (PREBUILT_TAG_URL, CMakeLists.txt's version) is
 # tried first and the latest release is the fallback (#214): an older checkout keeps the engine it shipped with.
-PREBUILT_URL = "https://github.com/Niko1221/Strata/releases/latest/download/"
+PREBUILT_URL = "https://github.com/j4ckzh0u/Strata/releases/latest/download/"
 # The repository the release assets and their SHA-256 come from; `engine_digest` reads the API here even
 # when --prebuilt points the download somewhere else, because the hash is only worth having if it comes
 # from somewhere the download does not.
-REPO = "Niko1221/Strata"
-PREBUILT_TAG_URL = "https://github.com/Niko1221/Strata/releases/download/v{version}/"
+REPO = "j4ckzh0u/Strata"
+PREBUILT_TAG_URL = "https://github.com/j4ckzh0u/Strata/releases/download/v{version}/"
 PREBUILT_ASSET = "strata-windows-x64.zip" if WIN else "strata-linux-x64.zip"
 # the CUDA libraries the ready-made engine loads (the same CUDA 13.0 it is built with), from NVIDIA's pip packages
 CUDA_WHEELS = ["nvidia-cublas==13.0.2.14", "nvidia-cuda-runtime==13.0.96"]
@@ -4942,7 +4942,7 @@ def release_of(base: str) -> tuple[str, str | None] | None:
     against a release the user did not ask for, over the network, which is wrong twice over.
 
     The repository comes out of the URL when it names one, so a fork's own releases are checked against
-    the fork rather than against Niko1221/Strata (which never has the fork's tags, so the check would
+    the fork rather than against j4ckzh0u/Strata (which never has the fork's tags, so the check would
     always fail).
     """
     m = re.search(r"https?://(?:www\.)?github\.com/([^/]+)/([^/]+)/releases/(?:download/v([^/]+)|latest)/",
@@ -8357,11 +8357,11 @@ def mac_control_setup(a) -> int:
     metal/setup_mac.py. Which sizes a Mac can run, whether one stays in memory or streams its experts from the SSD, and the
     Metal flags of the config are strata_control/mac_fit.py's, the module setup_mac.py and the model list use too."""
     from strata_control import mac_fit as MF
-    say("Strata on a Mac (Apple Silicon, Metal)")
+    say("Strata on a Mac (Metal)")
     step(1, "checking your Mac")
     info = MF.mac_info()
     ram = float(info["ram_gb"] or ram_gb())
-    ok(f"{info['chip']}, {ram:.0f} GB unified memory, macOS {info['macos'] or '?'}")
+    ok(f"{MF.gpu_line(info)}, macOS {info['macos'] or '?'}")
     if info.get("rosetta_python"):
         say("  (the Python that runs this is an Intel build running through Rosetta: Strata works, and the Apple Silicon Python "
             "from python.org or Homebrew in /opt/homebrew is a little faster to start)")
@@ -8383,13 +8383,13 @@ def mac_control_setup(a) -> int:
     if a.family not in (None, "qwen", "gyro"):
         fail(f"the app on a Mac runs the Qwen3.8-Flash-Next sizes ({', '.join(app_sizes)}); {a.family} is not one of them",
              "choose Qwen3.8-Flash-Next")
-    rec, notes = MF.recommend_model(ram)
+    rec, notes = MF.recommend_model(ram, info)
     if rec not in app_sizes:
         rec = "Q2_0"
     model = a.model or rec
     if model not in app_sizes:
         fail(f"{model} is not offered on a Mac in the app", "choose one of: " + ", ".join(app_sizes))
-    for n in MF.model_note(model, ram):
+    for n in MF.model_note(model, ram, info):
         warn(n)
     vision = mac_vision(a.vision, model, ram)
     ctx = a.context or MF.recommend_context(ram)
@@ -8399,7 +8399,7 @@ def mac_control_setup(a) -> int:
     family = MF.MAC_MODELS[model].get("family", "qwen")
     fam = FAMILIES[family]
     tag = fam["tag"] + model
-    stream = MF.streams(model, ram)
+    stream = MF.streams(model, ram, info)
 
     step(4, "the Strata engine (Metal)")
     from strata_control import engine_component as EC

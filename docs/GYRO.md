@@ -172,8 +172,9 @@ about 24 GB of RAM for the expert arena.
 ## On a Mac
 
 Apple Silicon Macs run Gyro-S and Gyro-M with Metal kernels (`metal/kernels`), the same published files and the same
-Hadamard-folded pack. What a Mac needs, the measured speeds on a 32 GB Mac mini and what was checked are in
-[MAC.md](MAC.md#gyro-s-and-gyro-m-agentionais-trellis-experts). Setup:
+Hadamard-folded pack. An Intel Mac with a Metal 3 AMD card runs them on the same engine, with prompts through the decode
+windows (that card has no Metal 4 prompt kernels). What a Mac needs, the measured speeds on a 32 GB Mac mini and what was
+checked are in [MAC.md](MAC.md#gyro-s-and-gyro-m-agentionais-trellis-experts). Setup:
 
 ```sh
 ./setup.sh --family gyro --model Gyro-S

@@ -186,8 +186,9 @@ NO_ENGINE_STEP = ("run `strata update` to get the newest engines and start again
 
 #: no graphics card Strata can use at all (an Intel UHD/Iris only, an AMD APU-only laptop, a virtual machine, Windows on ARM)
 NO_GPU_PREFIX = "no graphics card that Strata can use was found"
-NO_GPU_STEP = ("Strata needs an NVIDIA or AMD graphics card, an Intel Arc card or an Apple Silicon Mac, and there is no CPU-only engine for this "
-                "computer. Run Strata on a computer that has one; the model files stay here")
+NO_GPU_STEP = ("Strata needs an NVIDIA or AMD graphics card, an Intel Arc card, or a Mac (Apple Silicon, or an Intel Mac with a "
+                "Metal 3 AMD card), and there is no CPU-only engine for this computer. Run Strata on a computer that has one; the "
+                "model files stay here")
 
 
 def no_gpu_words(names: list[str] | None = None) -> str:

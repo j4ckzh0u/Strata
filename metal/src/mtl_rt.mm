@@ -47,12 +47,32 @@ static inline id<MTLBuffer> BO(const Buffer& b, size_t off, size_t& o) {
 static inline id<MTLComputePipelineState> P(const Pipeline* p) { return (__bridge id<MTLComputePipelineState>)p->handle; }
 static std::string g_device_name = "unknown GPU";
 
+// The GPU the engine runs on: the same choice as the runtime's (metal/src/gpu/runtime.cpp) - a discrete card before an
+// integrated one, then the larger working set; STRATA_METAL_DEVICE (name or index) overrides it.  An Intel Mac with an
+// AMD card and an Intel iGPU must not split the two halves of the engine over two devices.
+static id<MTLDevice> best_device() {
+    id<MTLDevice> pick = nil;
+    const char* want = std::getenv("STRATA_METAL_DEVICE");
+    NSArray<id<MTLDevice>>* all = MTLCopyAllDevices();
+    for (NSUInteger i = 0; want && *want && i < all.count && !pick; ++i)
+        if ([all[i].name containsString:[NSString stringWithUTF8String:want]] || std::atoi(want) == (int) i) pick = all[i];
+    if (!pick)
+        for (id<MTLDevice> d in all)
+            if (!d.hasUnifiedMemory && (!pick || d.recommendedMaxWorkingSetSize > pick.recommendedMaxWorkingSetSize)) pick = d;
+    if (!pick)
+        for (id<MTLDevice> d in all)
+            if (!pick || d.recommendedMaxWorkingSetSize > pick.recommendedMaxWorkingSetSize) pick = d;
+    if (!pick) pick = MTLCreateSystemDefaultDevice();
+    return pick;
+}
+
 Context::Context() : impl_(new Impl) {
-    impl_->dev = MTLCreateSystemDefaultDevice();
+    impl_->dev = best_device();
     if (!impl_->dev) {
         std::fprintf(stderr, "mtl: no Metal device\n");
         std::exit(2);
     }
+    g_device_name = [[impl_->dev name] UTF8String];
     impl_->q = [impl_->dev newCommandQueue];
     // env, then <exe dir>/metal/ (a component package), then the compiled-in source-tree path
     ggml_common_path = strata_metal::resource("STRATA_GGML_COMMON", "ggml-common.h", STRATA_GGML_COMMON_DEFAULT);
@@ -69,6 +89,7 @@ bool Context::supports_metal4() const {
     if (@available(macOS 26.0, *)) return [impl_->dev supportsFamily:MTLGPUFamilyMetal4];
     return false;
 }
+bool Context::unified_memory() const { return impl_->dev.hasUnifiedMemory; }
 uint64_t Context::recommended_working_set() const { return [impl_->dev recommendedMaxWorkingSetSize]; }
 uint64_t Context::max_buffer_length() const { return [impl_->dev maxBufferLength]; }
 
@@ -169,7 +190,7 @@ void require_fit(const Pipeline& p, uint32_t threads, const char* where) {
                  "strata metal: the kernel %s can run at most %d threads per threadgroup on this GPU (%s), but the %s asks "
                  "for %u.\nMetal skips such a dispatch without any error, so every answer would be wrong; stopping here "
                  "instead.  Please report this (the GPU, macOS version and this line) at "
-                 "https://github.com/Niko1221/Strata/issues .  (#2323)\n",
+                 "https://github.com/j4ckzh0u/Strata/issues .  (#2323)\n",
                  p.name.empty() ? "?" : p.name.c_str(), p.max_threads, g_device_name.c_str(), where, threads);
     std::fflush(stderr);
     std::exit(6);

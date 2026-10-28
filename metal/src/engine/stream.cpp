@@ -44,7 +44,8 @@ bool ExpertStream::wanted(const gguf::File& f, const mtl::Context& cx) {
     uint64_t phys = 0;
     size_t len = sizeof phys;
     sysctlbyname("hw.memsize", &phys, &len, nullptr, 0);
-    return !resident_fits((double) phys, (double) cx.recommended_working_set(), (double) all, 12.0 * (1ull << 30));
+    return !resident_fits((double) phys, (double) cx.recommended_working_set(), (double) all, 12.0 * (1ull << 30),
+                          !cx.unified_memory());
 }
 
 ExpertStream::~ExpertStream() {
@@ -398,6 +399,14 @@ bool ExpertStream::make_arena(mtl::Context& cx, uint64_t budget, const std::stri
     for (int e = 0; e < NE; ++e)
         for (int l = 0; l < NL; ++l)
             if (!seen[(size_t) l * NE + e]) rank.push_back({l, e});
+    // The arena is at most 4 buffers (the kernels' slots 0, 7, 8, 9), so a GPU with a small maxBufferLength caps it:
+    // 4 x 3.76 GB = 15.0 GB on an Intel Mac's Radeon Pro 5500M.  The plan's budget is clamped here (said, not failed).
+    const uint64_t chunk_max = cx.max_buffer_length() / PAGE * PAGE;
+    if (chunk_max && budget > 4 * chunk_max) {
+        std::fprintf(stderr, "strata metal stream: the arena is capped at %.2f GB on this GPU (4 buffers of at most %.2f GB)\n",
+                     (double) (4 * chunk_max) / 1e9, (double) chunk_max / 1e9);
+        budget = 4 * chunk_max;
+    }
     // the pool of each size class: at least min_slots (a prompt chunk's layer needs up to 512 at once), then the
     // top-ranked pairs that fit in the budget
     uint64_t used = 0;

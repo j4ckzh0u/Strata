@@ -24,7 +24,7 @@ Use the guide for your GPU and operating system. Model and feature support can d
 | AMD Radeon (RX and AI PRO R9700) | [AMD / HIP](AMD_HIP.md) |
 | AMD Ryzen AI Max / Strix Halo | [Strix Halo](STRIX_HALO.md) |
 | Intel Arc on Linux | [Intel Arc](INTEL_ARC.md) |
-| Apple Silicon | [Mac / Metal](MAC.md) |
+| Apple Silicon, and Intel Macs with a Metal 3 AMD card | [Mac / Metal](MAC.md) |
 | More than one GPU | [Multiple GPUs](MULTI_GPU.md) |
 | Older GPUs | [Experimental hardware](OLDER_GPUS.md) |
 

@@ -25,6 +25,7 @@ int pc_unit_of(int t) {
 
 bool Window::coop_k4() {
     if (const char* e = std::getenv("COOP_K4")) return std::atoi(e) != 0;
+    if (!cx_->supports_metal4()) return false;   // the probe and the layout are Metal 4's (M5); an AMD or Intel Mac has neither
     const int lib = cx_->compile({"mm_bench.metal"}, "#define NO_GGML_COMMON 1\n");
     mtl::Pipeline p = cx_->pipeline(lib, "coop_layout_16_64_32");
     mtl::Buffer out = cx_->alloc(4 * 3 * 32 * 128 * 4);

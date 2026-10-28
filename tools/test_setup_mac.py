@@ -6,6 +6,7 @@ PC: sysctl / sw_vers / xcode-select are mocked. No GPU, no network.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -30,12 +31,29 @@ def fake_run(values: dict, clt_rc=0):
         if cmd[0] == "xcode-select":
             return subprocess.CompletedProcess(cmd, clt_rc, "/Library/Developer/CommandLineTools" if clt_rc == 0 else "",
                                                "")
+        if cmd[0] == "system_profiler":
+            return subprocess.CompletedProcess(cmd, 0, values.get("gpu_json", "{}"), "")
         raise AssertionError(cmd)
     return run
 
 
 M5 = {"machdep.cpu.brand_string": "Apple M5 Max", "hw.memsize": str(128 * 2 ** 30), "macos": "27.2",
       "hw.perflevel0.physicalcpu": "12"}
+
+# A MacBookPro16,1: an Intel i9, 64 GB of RAM, the integrated Intel UHD 630 and the discrete Radeon Pro 5500M.
+INTEL_5500M = {"machdep.cpu.brand_string": "Intel(R) Core(TM) i9-9980HK CPU @ 2.40GHz",
+               "hw.memsize": str(64 * 2 ** 30), "macos": "15.7.5",
+               "gpu_json": json.dumps({"SPDisplaysDataType": [
+                   {"_name": "Intel UHD Graphics 630", "sppci_model": "Intel UHD Graphics 630",
+                    "spdisplays_vram_shared": "1536 MB", "spdisplays_metal": "Metal 3"},
+                   {"_name": "AMD Radeon Pro 5500M", "sppci_model": "AMD Radeon Pro 5500M",
+                    "spdisplays_vram": "8 GB", "spdisplays_metal": "Metal 3"}]})}
+INTEL_ONLY = {**INTEL_5500M, "gpu_json": json.dumps({"SPDisplaysDataType": [
+    {"_name": "Intel UHD Graphics 630", "sppci_model": "Intel UHD Graphics 630",
+     "spdisplays_vram_shared": "1536 MB", "spdisplays_metal": "Metal 3"}]})}
+INTEL_OLD_AMD = {**INTEL_5500M, "gpu_json": json.dumps({"SPDisplaysDataType": [
+    {"_name": "AMD Radeon Pro 5500M", "sppci_model": "AMD Radeon Pro 5500M",
+     "spdisplays_vram": "8 GB", "spdisplays_metal": "Supported, feature set macOS GPUFamily2 v1"}]})}
 
 
 class MacCheck(unittest.TestCase):
@@ -63,6 +81,37 @@ class MacCheck(unittest.TestCase):
         self.assertIn("Apple Silicon", p)
         self.assertIn("macOS 15", p)
         self.assertIn("xcode-select --install", p)
+
+    def test_an_intel_mac_with_a_metal3_amd_card_passes(self):
+        with mock.patch.object(M.platform, "machine", return_value="x86_64"):
+            info = M.mac_info(fake_run(INTEL_5500M))
+        self.assertFalse(info["arm64"])
+        self.assertTrue(info["discrete"])
+        self.assertEqual(info["gpu"]["name"], "AMD Radeon Pro 5500M")     # the discrete card, not the iGPU
+        self.assertAlmostEqual(info["gpu"]["vram_gb"], 8.0)
+        self.assertEqual(M.mac_problems(info), [])
+        self.assertIn("8 GB VRAM (discrete)", M.gpu_line(info))
+
+    def test_an_intel_mac_with_only_the_integrated_gpu_is_named(self):
+        with mock.patch.object(M.platform, "machine", return_value="x86_64"):
+            info = M.mac_info(fake_run(INTEL_ONLY))
+        p = " | ".join(M.mac_problems(info))
+        self.assertIn("integrated Intel UHD Graphics 630", p)
+
+    def test_a_card_without_metal3_is_refused(self):
+        with mock.patch.object(M.platform, "machine", return_value="x86_64"):
+            info = M.mac_info(fake_run(INTEL_OLD_AMD))
+        self.assertFalse(info["gpu"]["metal3"])
+        self.assertIn("no Metal 3", " | ".join(M.mac_problems(info)))
+
+    def test_the_discrete_budget_is_the_ram_less_what_macos_keeps(self):
+        phys = 64 * M.GIB_GB
+        self.assertAlmostEqual(M.gpu_budget_gb(64, {"discrete": True}),
+                               phys - max(7.0, M.RESIDENT_LEAVE_SHARE * phys), places=3)
+        self.assertAlmostEqual(M.gpu_budget_gb(64), min(64 * M.GIB_GB * 0.75, 64 * M.GIB_GB * 0.70), places=3)
+        self.assertTrue(M.streams("Q2_0", 64, {"discrete": True}))
+        self.assertEqual(M.recommend_model(64, {"discrete": True})[0], "Q2_0")
+        self.assertTrue(any("PCIe" in n for n in M.model_note("Q2_0", 64, {"discrete": True})))
 
 
 class Recommendation(unittest.TestCase):

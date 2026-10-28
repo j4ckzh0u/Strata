@@ -6,7 +6,7 @@ one; do not start from a source checkout.
 - **The Terminal and `strata launch`** (below). This is the route for an agent that has a shell.
 - **The desktop app.** One installer per system: `Strata-0.2.6-windows-x64-setup.exe`,
   `Strata-0.2.6-linux-x86_64.AppImage`, `Strata-0.2.6-macos-arm64.dmg`, from the
-  [latest release](https://github.com/Niko1221/Strata/releases/latest). The Windows and Linux installers carry no
+  [latest release](https://github.com/j4ckzh0u/Strata/releases/latest). The Windows and Linux installers carry no
   engine: on first start the app shows the engine for the user's graphics card and downloads it, or installs a file the
   user already has ("I already have the file"). Details: [INSTALL.md](INSTALL.md).
 
@@ -16,7 +16,8 @@ Model availability, provider preference and API details are in [AI_REFERENCE.md]
 
 - Check OS, CPU architecture, graphics cards, driver, available RAM/VRAM and free disk space.
 - Use the [hardware guides](INSTALL.md#what-you-need). Linux and Windows packages are x86-64; Mac packages are
-  Apple Silicon and need macOS 15 or newer. Older GPUs, Intel Arc and low-memory machines have specific limits.
+  Apple Silicon and need macOS 15 or newer (an Intel Mac with a Metal 3 AMD card builds the engine from source with
+  `./setup.sh`). Older GPUs, Intel Arc and low-memory machines have specific limits.
 - Model support is separate from hardware support. Qwen3.6 currently uses CUDA or HIP; it is not a Metal/SYCL model.
   DeepSeekV4.1-Flash-1017 (`--family deepseek41`) runs in the app and in the Terminal, on NVIDIA RTX 30, 40 and 50
   (Windows and Linux) and on the AMD Radeon AI PRO R9700 under Linux. It has three sets: 1.75 bpw (239 GB of disk),
@@ -39,13 +40,13 @@ installs into the user's home folder. The engine and model are acquired during l
 **Linux / Mac:**
 
 ```sh
-curl -fsSL https://github.com/Niko1221/Strata/releases/latest/download/install.sh -o install.sh && sh install.sh
+curl -fsSL https://github.com/j4ckzh0u/Strata/releases/latest/download/install.sh -o install.sh && sh install.sh
 ```
 
 **Windows PowerShell:**
 
 ```powershell
-irm https://github.com/Niko1221/Strata/releases/latest/download/install.ps1 | iex
+irm https://github.com/j4ckzh0u/Strata/releases/latest/download/install.ps1 | iex
 ```
 
 Open a new terminal on Windows. On Linux and Mac, use the full executable path printed by the installer if

@@ -3,12 +3,17 @@ Metal defaults of a run config. ONE definition, read by metal/setup_mac.py (a Ma
 Control mode (the app and the Terminal on a Mac: model files only, the engine is a component) and by tools/strata_mcp.py (the
 model list, the fit words and the recommendation both show). Pure: nothing here downloads, builds or starts anything.
 
-Unified memory: a Mac has one pool. Metal keeps a share of it resident (GPU_SHARE; on a big Mac the memory less what macOS and
-its file cache keep), a pack that does not fit streams its experts from the SSD (the engine decides by itself).
+Memory: an Apple Silicon Mac has one pool (unified memory). An Intel Mac with an AMD card has two: the card's own VRAM (8 GB
+on a Radeon Pro 5500M) and the RAM. The Metal engine's buffers are storageModeShared, so they live in RAM whatever the card,
+and Metal on those cards allows more of them than recommendedMaxWorkingSetSize (measured: 40 GB of buffers on the 8 GB 5500M):
+the RAM is the budget then, less what macOS keeps (the engine's arena_budget.h says the same with `discrete`). A pack that
+does not fit streams its experts from the SSD (the engine decides by itself).
 """
 from __future__ import annotations
 
+import json
 import platform
+import re
 import subprocess
 from pathlib import Path
 
@@ -78,8 +83,48 @@ def _sysctl(name: str, run=subprocess.run) -> str:
         return ""
 
 
+def _gpu_gb(text: str) -> float:
+    """"8 GB" / "1536 MB" / "Shared" as GB (0 for the shared pools: their size is the RAM's)."""
+    m = re.match(r"\s*([0-9]+(?:\.[0-9]+)?)\s*(GB|MB)\b", text or "", re.I)
+    if not m:
+        return 0.0
+    return float(m.group(1)) * (1.0 if m.group(2).upper() == "GB" else 1.0 / 1024.0)
+
+
+def mac_gpus(run=subprocess.run) -> list[dict]:
+    """The Mac's GPUs as `system_profiler SPDisplaysDataType -json` reports them: name, VRAM in GB, whether that memory is
+    the system's (unified / shared) and Metal 3.  Best effort: a Mac (or a fake runner) without the command returns []."""
+    try:
+        out = run(["system_profiler", "SPDisplaysDataType", "-json"], capture_output=True, text=True, timeout=20)
+        data = json.loads(out.stdout or "{}") if out.returncode == 0 else {}
+    except Exception:   # system_profiler missing, timed out, or not JSON: the other checks still run
+        return []
+    gpus = []
+    for d in (data.get("SPDisplaysDataType") or []) if isinstance(data, dict) else []:
+        if not isinstance(d, dict):
+            continue
+        name = (d.get("sppci_model") or d.get("_name") or d.get("spdisplays_chipset_model") or "").strip()
+        if not name:
+            continue
+        vram_txt = str(d.get("spdisplays_vram") or "")
+        shared_txt = str(d.get("spdisplays_vram_shared") or "")
+        metal_txt = str(d.get("spdisplays_metal") or "")
+        unified = bool(shared_txt) or name.lower().startswith("apple") or "intel" in name.lower()
+        gpus.append({"name": name, "vram_gb": _gpu_gb(vram_txt) or _gpu_gb(shared_txt), "unified": unified,
+                     "metal3": bool(re.search(r"metal\s*([34])", metal_txt, re.I))})
+    return gpus
+
+
+def best_gpu(gpus: list[dict]) -> dict | None:
+    """The GPU the Metal engine runs on, chosen as the engine's runtime does: a discrete card before an integrated one,
+    then the larger memory."""
+    if not gpus:
+        return None
+    return max(gpus, key=lambda g: (not g["unified"], g["vram_gb"]))
+
+
 def mac_info(run=subprocess.run) -> dict:
-    """The chip, its unified memory, macOS, the architecture and the Command Line Tools."""
+    """The chip, its memory, macOS, the architecture, the Command Line Tools and the GPU."""
     chip = _sysctl("machdep.cpu.brand_string", run) or "unknown chip"
     try:
         ram = int(_sysctl("hw.memsize", run) or 0) / 2 ** 30   # GB as Apple sells them (128 GB = 2^37 bytes)
@@ -98,8 +143,21 @@ def mac_info(run=subprocess.run) -> dict:
     # (Rosetta passes "Apple M1 Max" through) and hw.optional.arm64 say what the Mac is.
     python_arm = platform.machine() == "arm64"
     mac_arm = python_arm or _sysctl("hw.optional.arm64", run) == "1" or chip.startswith("Apple")
+    gpus = mac_gpus(run)
+    gpu = best_gpu(gpus)
     return {"chip": chip, "ram_gb": ram, "macos": ver, "arm64": mac_arm, "rosetta_python": mac_arm and not python_arm,
-            "clt": clt_path, "perf_cores": int(_sysctl("hw.perflevel0.physicalcpu", run) or 0)}
+            "clt": clt_path, "perf_cores": int(_sysctl("hw.perflevel0.physicalcpu", run) or 0),
+            "gpu": gpu, "gpus": gpus, "discrete": bool(gpu and not gpu["unified"])}
+
+
+def gpu_line(info: dict) -> str:
+    """The GPU and the memory as a setup line: "AMD Radeon Pro 5500M, 8 GB VRAM (discrete), 64 GB RAM"."""
+    g = info.get("gpu") or {}
+    if not g:
+        return f"{info['chip']}, {info['ram_gb']:.0f} GB memory"
+    if g.get("unified"):
+        return f"{g['name']}, {info['ram_gb']:.0f} GB unified memory"
+    return f"{g['name']}, {g['vram_gb']:.0f} GB VRAM (discrete), {info['ram_gb']:.0f} GB RAM"
 
 
 def macos_tuple(ver: str) -> tuple:
@@ -114,7 +172,16 @@ def mac_problems(info: dict, need_compiler: bool = True) -> list[str]:
     need_compiler=False leaves the Command Line Tools out."""
     p = []
     if not info["arm64"]:
-        p.append(f"this Mac has an Intel CPU ({info['chip']}): the Metal engine needs Apple Silicon (M1 or newer)")
+        gpu = info.get("gpu") or {}
+        if not gpu:
+            p.append(f"this Mac has an Intel CPU ({info['chip']}) and no Metal 3 GPU was found: the Metal engine needs Apple "
+                     "Silicon (M1 or newer) or an Intel Mac with a discrete AMD card (a Radeon Pro)")
+        elif not gpu.get("metal3"):
+            p.append(f"the GPU {gpu['name']} has no Metal 3: the Metal engine needs Apple Silicon (M1 or newer) or a Metal 3 "
+                     "AMD card (a Radeon Pro; macOS 15 or newer)")
+        elif gpu.get("unified"):
+            p.append(f"the GPU is the integrated {gpu['name']}: the Metal engine needs a discrete AMD card on an Intel Mac; "
+                     "the integrated GPU shares the RAM and has no memory budget of its own")
     if macos_tuple(info["macos"]) < MIN_MACOS:
         p.append(f"macOS {info['macos'] or '?'}: the Metal engine needs macOS {MIN_MACOS[0]} or newer (System Settings "
                  "> General > Software Update)")
@@ -124,36 +191,43 @@ def mac_problems(info: dict, need_compiler: bool = True) -> list[str]:
     return p
 
 
-def gpu_budget_gb(ram_gb: float) -> float:
-    """The most a resident pack may hold, in GB: Metal's working set, and on a big Mac the RAM less what macOS and the file
-    cache keep (the engine's resident_cap: min of the two)."""
+def gpu_budget_gb(ram_gb: float, info: dict | None = None) -> float:
+    """The most a resident pack may hold, in GB.  Apple Silicon: Metal's working set, and on a big Mac the RAM less what
+    macOS and the file cache keep (the engine's resident_cap: min of the two).  An Intel Mac's AMD card: its buffers are
+    storageModeShared, so they live in RAM and Metal lets their total pass the working set (measured); the RAM less what
+    macOS keeps is the budget then, exactly the engine's `discrete` rule."""
+    phys = ram_gb * GIB_GB
+    if info is not None and info.get("discrete"):
+        return phys - max(7.0, RESIDENT_LEAVE_SHARE * phys)
     ws = ram_gb * GPU_SHARE * GIB_GB
     if ram_gb >= BIG_MAC_GB:
-        return min(ws, ram_gb * GIB_GB * (1.0 - RESIDENT_LEAVE_SHARE))
+        return min(ws, phys * (1.0 - RESIDENT_LEAVE_SHARE))
     return ws
 
 
-def model_need_gb(model: str) -> float:
-    return MAC_MODELS[model]["shard1_gb"] + OVERHEAD_GB
+def model_need_gb(model: str, info: dict | None = None) -> float:
+    # A discrete card's prompt buffers go through the RAM too, and the engine keeps 12 GB beside the mapped file there
+    # (stream.cpp's resident_fits); Apple Silicon's own rule keeps 8.
+    return MAC_MODELS[model]["shard1_gb"] + (12.0 if info is not None and info.get("discrete") else OVERHEAD_GB)
 
 
-def streams(model: str, ram_gb: float) -> bool:
-    """The pack does not fit Metal's share of the memory: the engine streams its experts from the SSD."""
-    return model_need_gb(model) > gpu_budget_gb(ram_gb)
+def streams(model: str, ram_gb: float, info: dict | None = None) -> bool:
+    """The pack does not fit the memory the GPU's buffers may take: the engine streams its experts from the SSD."""
+    return model_need_gb(model, info) > gpu_budget_gb(ram_gb, info)
 
 
-def recommend_model(ram_gb: float) -> tuple[str, list[str]]:
+def recommend_model(ram_gb: float, info: dict | None = None) -> tuple[str, list[str]]:
     """The default pack and the notes that go with it. IQ3_S and UD-Q4_K_XL are the recommended sizes (RECOMMENDED):
     the default is IQ3_S when it stays resident, with UD-Q4_K_XL named as the higher-quality choice where it fits too;
     below that the largest pack that stays resident (IQ3_XXS, Q2_0); nothing fits: Q2_0 streamed from the SSD."""
-    if not streams("IQ3_S", ram_gb):
+    if not streams("IQ3_S", ram_gb, info):
         notes = []
-        if not streams("UD-Q4_K_XL", ram_gb):
+        if not streams("UD-Q4_K_XL", ram_gb, info):
             notes.append("UD-Q4_K_XL (recommended too) also fits this Mac: higher quality than IQ3_S (92.8% top-1 against "
                          "Q8_0 where IQ3_S has 87.9%), about 20% slower on a story; choose it with --model UD-Q4_K_XL")
         return "IQ3_S", notes
     for m in ("IQ3_XXS", "Q2_0"):
-        if not streams(m, ram_gb):
+        if not streams(m, ram_gb, info):
             return m, []
     return "Q2_0", [f"{ram_gb:.0f} GB of memory: no pack fits whole, so the engine streams the experts from the SSD "
                     f"(automatic; measured on a 32 GB M4: Q2_0 {STREAM_MEASURED['Q2_0']}, IQ3_XXS "
@@ -161,12 +235,13 @@ def recommend_model(ram_gb: float) -> tuple[str, list[str]]:
                     "draft layer (slower when streaming)"]
 
 
-def model_note(model: str, ram_gb: float) -> list[str]:
+def model_note(model: str, ram_gb: float, info: dict | None = None) -> list[str]:
     """What a chosen pack risks on this Mac (said, never refused)."""
     notes = []
-    if streams(model, ram_gb):
-        notes.append(f"{model} needs ~{model_need_gb(model):.0f} GB of the {gpu_budget_gb(ram_gb):.0f} GB Metal keeps "
-                     "resident on this Mac: its experts stream from the SSD (automatic)"
+    if streams(model, ram_gb, info):
+        budget = gpu_budget_gb(ram_gb, info)
+        notes.append(f"{model} needs ~{model_need_gb(model, info):.0f} GB of the {budget:.0f} GB the GPU's buffers may take "
+                     "on this Mac: its experts stream from the SSD (automatic)"
                      + (f"; measured on a 32 GB M4: {STREAM_MEASURED[model]}" if model in STREAM_MEASURED else
                         "; not measured streaming"))
     if MAC_MODELS[model].get("missing"):
@@ -174,6 +249,9 @@ def model_note(model: str, ram_gb: float) -> list[str]:
                      "engine will stop when it loads; kept as you chose (for testing a newer engine)")
     elif not MAC_MODELS[model]["tested"]:
         notes.append(f"{model} has not been measured on a Mac yet")
+    if info is not None and info.get("discrete"):
+        notes.append("a discrete card's kernels read the weights over PCIe (measured: about 1.4 GB/s on a Radeon Pro 5500M): "
+                     "expect a few tokens a second, far below an Apple Silicon Mac")
     return notes
 
 

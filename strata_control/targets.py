@@ -18,10 +18,11 @@ class ComponentError(RuntimeError):
 
 
 #: The OS × backend families the handoff commits to. A component may only be activated where its
-#: family is listed here, so an unqualified combination is refused rather than attempted: the packet
-#: is explicit that Windows SYCL and Intel Macs are not supported rather than merely untested.
+#: family is listed here, so an unqualified combination is refused rather than attempted: Windows SYCL
+#: is not supported, and an Intel Mac's Metal engine is built from source there (macos-x86_64; the
+#: Intel Macs without a Metal 3 AMD card are refused by strata_control/mac_fit.py's check).
 BACKEND_MATRIX: dict[str, tuple[str, ...]] = {
-    "metal": ("macos-arm64",),
+    "metal": ("macos-arm64", "macos-x86_64"),
     "cuda": ("windows-x86_64", "linux-x86_64"),
     "hip": ("windows-x86_64", "linux-x86_64"),
     "sycl": ("linux-x86_64",),

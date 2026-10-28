@@ -39,6 +39,7 @@
 #include <unistd.h>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <sys/mman.h>
 #include <sys/sysctl.h>
@@ -127,6 +128,9 @@ public:
     int64_t vocab() const { return n_vocab_; }
     bool ready() const { return cx_ != nullptr; }
     bool streaming() const { return stream_; }
+    // Metal 4 (the M5's matmul2d / MetalPerformancePrimitives prompt kernels): an AMD or Intel Mac GPU has none, and the
+    // prompt then runs through the decode windows (the exact fallback, slower)
+    bool has_metal4() const { return cx_ != nullptr && cx_->supports_metal4(); }
     // --serve's conversation checkpoints: the window's running state (the GDN recurrences and conv histories, the
     // PLE history, each QSA layer's indexer tail and tail-block key); the KV and pooled keys are positional
     bool checkpoint_save(strata::core::ConversationCheckpoint& c, std::string& err);
@@ -488,8 +492,26 @@ bool Window::init(const strata::core::ModelGeometry& g, strata::core::SessionSta
     }
     n_vocab_ = (int64_t) T("output.weight").shape[1];
     if (const gguf::Tensor* e0 = f_.find("blk.0.ffn_gate_exps.weight")) gyro_dense_ = e0->type >= 144;
+    // The expert formats this model uses.  moe.metal compiles one unrolled kernel set per format, and the AMD Metal backend
+    // compiles them on the CPU: all 16 formats took ~11 minutes on a Radeon Pro 5500M.  Only the model's formats are
+    // instantiated; Apple Silicon's source is unchanged (no select = every format, as before).
+    std::string moe_defs = "#define STRATA_MOE_SELECT 1\n";
+    {
+        std::set<int> fmts;
+        for (int l = 0; l < 48; ++l) {
+            const std::string b = "blk." + std::to_string(l) + ".";
+            for (const char* role : {"ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight"})
+                if (const gguf::Tensor* t = f_.find(b + role)) fmts.insert(t->type);
+        }
+        if (fmts.count(ref::Q2_0)) fmts.insert(142);   // the raw-activation down read (Q2_0R)
+        if (fmts.empty()) {                             // no routed experts found: keep every format (the old source)
+            moe_defs.clear();
+        } else {
+            for (int t : fmts) moe_defs += "#define STRATA_MOE_" + std::to_string(t) + " 1\n";
+        }
+    }
     lib_ = cx_->compile({"quant.metal", "units.metal", "moe.metal", "gemv.metal", "router.metal", "gr.metal", "gr2.metal",
-                         "glue.metal"});
+                         "glue.metal"}, moe_defs);
     rcounter_ = cx_->alloc(16);
     lgdn_ = cx_->compile({"gdn.metal"}, "#define NO_GGML_COMMON 1\n");
     lqsa_ = cx_->compile({"qsa.metal", "qsa2.metal"}, "#define NO_GGML_COMMON 1\n");
@@ -1276,6 +1298,7 @@ bool Window::stream_arena(std::string& err) {
     };
     ArenaMem am;   // arena_budget.h: the rule, testable
     am.phys = (double) phys;
+    am.discrete = !cx_->unified_memory();   // an Intel Mac's AMD card: its buffers are RAM-backed (arena_budget.h)
     am.working_set = (double) cx_->recommended_working_set();
     am.allocated = used;
     const ProcMem pm0 = proc_mem();   // everything the process holds, not only the Metal buffers (the old 67% rule missed it)
@@ -1310,16 +1333,16 @@ bool Window::stream_arena(std::string& err) {
         // reserve, against the cap (arena_budget.h: footprint_cap)
         const FootprintPlan fp = footprint_plan(am, budget);
         std::fprintf(stderr, "strata metal stream: planned resident footprint %.1f GB = arena %.1f + %.1f held before it + %.1f "
-                             "reserved for the n-gram table; cap %.1f GB = the lesser of the GPU working set %.1f GB and the RAM "
-                             "%.1f GB less %.1f GB left to macOS and its file cache%s\n",
-                     fp.total / gb, fp.arena / gb, fp.base / gb, fp.ple / gb, fp.cap / gb, cx_->recommended_working_set() / gb,
-                     phys / gb, (am.phys - fp.cap) / gb,
+                             "reserved for the n-gram table; cap %.1f GB = %s%s\n",
+                     fp.total / gb, fp.arena / gb, fp.base / gb, fp.ple / gb, fp.cap / gb,
+                     am.discrete ? "the RAM less what macOS keeps, because this GPU's buffers live in the RAM"
+                                 : "the lesser of the GPU working set and the RAM less what macOS and its file cache keep",
                      am.arena_gb >= 0 && fp.over() ? " - STRATA_METAL_ARENA_GB is above the cap: kept as set (your choice), but "
                                                      "a Mac that runs short of memory can freeze (watchdog panics seen at 90+ GB "
                                                      "resident of 128)" : "");
     }
     const char* epg = std::getenv("STRATA_METAL_PROMPT_GEMM");
-    const bool pg_on = !(epg && std::string(epg) == "0");
+    const bool pg_on = !(epg && std::string(epg) == "0") && cx_->supports_metal4();   // its kernels need Metal 4 (the M5)
     bool minimal = false;   // the arena's least layout (the min slots) is not shrunk further: it goes ahead, filled in steps
     for (int tries = 0;; ++tries) {
         const double planned = budget;
@@ -2689,7 +2712,10 @@ bool prompt_run(const int64_t* tokens, int64_t n, int64_t pos0, const float* con
 bool prompt_run_rows(const int64_t* tokens, int64_t n, int64_t pos0,
                      const std::function<bool(const float*, int64_t, int64_t, std::string&)>& on_chunk, std::string& err) {
     if (g_window == nullptr) { err = "metal prompt: the decode window is not up yet"; return false; }
-    static const bool windows = std::getenv("STRATA_METAL_PROMPT") && std::string(std::getenv("STRATA_METAL_PROMPT")) == "window";
+    static const bool windows_env = std::getenv("STRATA_METAL_PROMPT") && std::string(std::getenv("STRATA_METAL_PROMPT")) == "window";
+    // A GPU without Metal 4 (an AMD or Intel Mac card) cannot build the prompt path's MetalPerformancePrimitives kernels:
+    // its prompts run through the decode windows, the exact fallback.
+    const bool windows = windows_env || !g_window->has_metal4();
     static const int64_t min_rows = std::getenv("STRATA_METAL_PROMPT_MIN") ? std::atoll(std::getenv("STRATA_METAL_PROMPT_MIN")) : 32;
     if (!windows && !g_window->streaming() && n >= min_rows) return g_window->prompt(tokens, n, pos0, on_chunk, err);
     if (!windows && g_window->streaming()) {

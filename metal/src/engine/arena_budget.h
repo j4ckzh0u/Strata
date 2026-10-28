@@ -44,6 +44,9 @@ struct ArenaMem {
     double keep_gb = -1;      // STRATA_METAL_KEEP_FREE_GB (< 0: unset)
     double arena_gb = -1;     // STRATA_METAL_ARENA_GB (< 0: unset)
     double leave_share = -1;  // STRATA_METAL_LEAVE_SHARE: the share of the RAM a big Mac leaves to macOS (< 0: kLeaveShare)
+    bool discrete = false;    // an AMD or Intel card in an Intel Mac: its storageModeShared buffers live in RAM, and Metal
+                              // lets their total pass recommendedMaxWorkingSetSize (measured: 40 GB of buffers on an 8 GB
+                              // Radeon Pro 5500M).  The RAM is the budget then, not the working set.
 };
 
 constexpr double kGB = 1e9;
@@ -86,14 +89,14 @@ inline double footprint_cap(const ArenaMem& m) {
     const double share = m.leave_share >= 0 ? m.leave_share : kLeaveShare;
     double leave = arena_keep(m);
     if (m.phys >= kBigMac) leave = std::max({leave, share * m.phys, m.filecache_min > 0 ? m.filecache_min + kFileCacheHeadroom : 0.0});
-    return std::min(m.working_set, m.phys - leave);
+    return m.discrete ? m.phys - leave : std::min(m.working_set, m.phys - leave);
 }
 
 /// The most a resident pack (its mapped bytes + the engine's buffers) may hold.
 inline double resident_cap(const ArenaMem& m) {
     double leave = arena_keep(m);
     if (m.phys >= kBigMac) leave = std::max(leave, kResidentLeaveShare * m.phys);
-    return std::min(m.working_set, m.phys - leave);
+    return m.discrete ? m.phys - leave : std::min(m.working_set, m.phys - leave);
 }
 
 /// What the engine holds before the arena: the Metal buffers (alloc + wrap) or, when the process holds more, all of it
@@ -111,7 +114,7 @@ inline double arena_ple_reserve(const ArenaMem& m) { return m.ple_mapped > 0 ? m
 /// The arena's bytes (at least 1 GB: a smaller arena still runs, at a low hit rate).
 inline double arena_budget(const ArenaMem& m) {
     if (m.arena_gb >= 0) return m.arena_gb * kGB;
-    const double gpu = m.working_set - footprint_base(m) - 1.0 * kGB;
+    const double gpu = (m.discrete ? m.phys : m.working_set) - footprint_base(m) - 1.0 * kGB;
     const double ram = m.available - arena_keep(m) - arena_ple_reserve(m);
     const double foot = footprint_cap(m) - footprint_base(m) - arena_ple_reserve(m);   // the whole footprint under the cap
     return std::max(1.0 * kGB, std::min(std::min(gpu, ram), foot));
@@ -134,10 +137,11 @@ inline FootprintPlan footprint_plan(const ArenaMem& m, double arena) {
 
 /// A pack that stays resident (no SSD streaming) holds its mapped bytes plus `overhead` (the prompt buffers, KV, the draft
 /// layer, ...): does that fit under the resident cap?  (stream.cpp: ExpertStream::wanted)
-inline bool resident_fits(double phys, double working_set, double model_bytes, double overhead) {
+inline bool resident_fits(double phys, double working_set, double model_bytes, double overhead, bool discrete = false) {
     ArenaMem m;
     m.phys = phys;
     m.working_set = working_set;
+    m.discrete = discrete;
     return model_bytes + overhead <= resident_cap(m);
 }
 

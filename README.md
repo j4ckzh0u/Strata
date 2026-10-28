@@ -15,8 +15,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Niko1221/Strata/releases/latest"><img src="https://img.shields.io/github/v/release/Niko1221/Strata?label=download&color=0ab887" alt="Download Strata"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/Niko1221/Strata" alt="MIT license"></a>
+  <a href="https://github.com/j4ckzh0u/Strata/releases/latest"><img src="https://img.shields.io/github/v/release/j4ckzh0u/Strata?label=download&color=0ab887" alt="Download Strata"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/j4ckzh0u/Strata" alt="MIT license"></a>
   <a href="https://buymeacoffee.com/strataengine"><img src="https://img.shields.io/badge/Buy_me_a_coffee-FFDD00?logo=buymeacoffee&logoColor=000" alt="Support Strata on Buy Me a Coffee"></a>
 </p>
 
@@ -79,7 +79,7 @@ Measured with the 2.00 bpw set on Strata 0.2.5. Output is the speed of the answe
 | 1x Radeon AI PRO R9700, 251 GB RAM | 21 to 25 tokens/s | 320 to 360 tokens/s (8K) |
 | 4x Radeon AI PRO R9700 | 74 to 77 tokens/s | 400 to 450 tokens/s (8K) |
 
-[Memory, disk and details](docs/DEEPSEEK41.md) · [Release notes](https://github.com/Niko1221/Strata/releases)
+[Memory, disk and details](docs/DEEPSEEK41.md) · [Release notes](https://github.com/j4ckzh0u/Strata/releases)
 
 </details>
 
@@ -93,7 +93,7 @@ Not sure what fits? [Choose a model for your computer](docs/MODELS.md#pick-by-me
 
 ### Desktop app
 
-**[Download Strata for Windows, Linux or Mac →](https://github.com/Niko1221/Strata/releases/latest)**
+**[Download Strata for Windows, Linux or Mac →](https://github.com/j4ckzh0u/Strata/releases/latest)**
 
 Install the app, choose a model, and start chatting. There is one installer for each system. On first start the app
 downloads the engine for your graphics card. [Help with the installer](docs/INSTALL.md#the-app).
@@ -117,13 +117,13 @@ Prefer the terminal? Install Strata, then run **`strata launch`**.
 **Linux / Mac**
 
 ```sh
-curl -fsSL https://github.com/Niko1221/Strata/releases/latest/download/install.sh -o install.sh && sh install.sh
+curl -fsSL https://github.com/j4ckzh0u/Strata/releases/latest/download/install.sh -o install.sh && sh install.sh
 ```
 
 **Windows PowerShell**
 
 ```powershell
-irm https://github.com/Niko1221/Strata/releases/latest/download/install.ps1 | iex
+irm https://github.com/j4ckzh0u/Strata/releases/latest/download/install.ps1 | iex
 ```
 
 On Windows, open a new terminal afterwards. Then:
@@ -156,6 +156,7 @@ Follow the prompts to download and start a model. [Terminal guide](docs/TERMINAL
 | **AMD Radeon RX 6800 / 6900 · experimental** | [RX 6000 setup](docs/AMD_HIP.md#rdna2-gfx1030) |
 | **Intel Arc · Linux** | [Intel setup](docs/INTEL_ARC.md) |
 | **Apple Silicon · M1 or newer** | [Mac setup](docs/MAC.md) |
+| **Intel Mac + a Metal 3 AMD card (a Radeon Pro) · macOS 15+** | [Mac setup, built from source](docs/MAC.md#intel-macs-with-an-amd-card) |
 | **AMD Ryzen AI Max · Strix Halo** | [Strix Halo setup](docs/STRIX_HALO.md) |
 
 <a id="using-it"></a>
@@ -173,7 +174,7 @@ Run **`strata connect`** to see setup instructions for your tool. [Connection gu
 
 ## Help
 
-[All guides](docs) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Report a bug](https://github.com/Niko1221/Strata/issues/new/choose) ·
+[All guides](docs) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Report a bug](https://github.com/j4ckzh0u/Strata/issues/new/choose) ·
 [Benchmarks](docs/COMMUNITY_BENCHMARKS.md) · [How it works](docs/HOW_IT_WORKS.md) · [Contribute](CONTRIBUTING.md)
 
 ## Support Strata

@@ -322,18 +322,68 @@ kernel void moe_combine(device const float* ye [[buffer(0)]], device float* y [[
                   GU(F, 16, 1, 4) GU(F, 16, 2, 4) GU(F, 8, 1, 4) GU(F, 8, 2, 4) GU(F, 8, 1, 2)
 #define DN_SET(F) DN(F, 8, 1, 4) DN(F, 8, 2, 4) DN(F, 8, 4, 4) DN(F, 8, 1, 8) DN(F, 8, 2, 8) DN(F, 4, 1, 4) DN(F, 4, 2, 4) \
                   DN(F, 4, 4, 4) DN(F, 16, 1, 4) DN(F, 16, 2, 4) DN(F, 32, 1, 4) DN(F, 2, 2, 4)
+// Only the expert formats this model uses are instantiated when the host asks (STRATA_MOE_SELECT + one STRATA_MOE_<type>
+// per tensor type; window.cpp reads them from the GGUF).  The AMD Metal backend compiles one unrolled expert kernel at a
+// time on the CPU: all 16 formats take ~11 minutes on a Radeon Pro 5500M, one to four take a fraction of that.  Without
+// the select every format is instantiated, as before (Apple Silicon keeps its byte-identical source).
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_42)
 GU_SET(T_Q2_0)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_18)
 GU_SET(T_IQ3_XXS)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_16)
 GU_SET(T_IQ2_XXS)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_17)
 GU_SET(T_IQ2_XS)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_22)
 GU_SET(T_IQ2_S)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_21)
 GU_SET(T_IQ3_S)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_23)
 GU_SET(T_IQ4_XS)   // the IQ3_S pack's gate/up in one layer
-GU_SET(T_Q4_K) GU_SET(T_Q5_K) GU_SET(T_Q6_K) GU_SET(T_Q8_0)   // the UD-Q4/5/6_K_XL packs
-DN_SET(T_Q5_1) DN_SET(T_Q8_0)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_12)
+GU_SET(T_Q4_K)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_13)
+GU_SET(T_Q5_K)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_14)
+GU_SET(T_Q6_K)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_8)
+GU_SET(T_Q8_0)   // the UD-Q4/5/6_K_XL packs
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_7)
+DN_SET(T_Q5_1)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_8)
+DN_SET(T_Q8_0)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_42)
 DN_SET(T_Q2_0)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_142)
 DN_SET(T_Q2_0R)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_20)
 DN_SET(T_IQ4_NL)
+#endif
 // Gyro (agentionai's trellis experts): TQK6 / TQ2_T gate/up, TQK7 / TQ2_T down (the CUDA engine's STRATA_GU_FMTS / D_FMTS)
-GU_SET(T_TQK6) GU_SET(T_TQ2T)
-DN_SET(T_TQK7) DN_SET(T_TQ2T)
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_145)
+GU_SET(T_TQK6)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_144)
+GU_SET(T_TQ2T)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_146)
+DN_SET(T_TQK7)
+#endif
+#if !defined(STRATA_MOE_SELECT) || defined(STRATA_MOE_144)
+DN_SET(T_TQ2T)
+#endif

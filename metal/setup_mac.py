@@ -36,7 +36,7 @@ from strata_control import mac_fit as _fit  # noqa: E402
 from strata_control.mac_fit import (  # noqa: E402,F401  (re-exported: the tests and callers use these names here)
     BIG_MAC_GB, CONTEXTS, GIB_GB, GPU_SHARE, MAC_ABOUT, MAC_MODELS, MIN_MACOS, OVERHEAD_GB, RECOMMENDED,
     RESIDENT_LEAVE_SHARE, STREAM_COPY_GAIN, STREAM_MEASURED, STREAM_MTP_FROM_GB, STREAM_SPEC, TESTED_CONTEXT,
-    _sysctl, gpu_budget_gb, mac_info, mac_problems, macos_tuple, model_need_gb, model_note, recommend_context,
+    _sysctl, gpu_budget_gb, gpu_line, mac_info, mac_problems, macos_tuple, model_need_gb, model_note, recommend_context,
     recommend_model, stream_mtp, streams)
 
 # Apple's metal-cpp headers for the macOS 26 SDK (https://developer.apple.com/metal/cpp/), pinned by SHA-256
@@ -361,7 +361,7 @@ def main(argv=None) -> int:
     # with the same unreachable host (#2363).
     if a.source:
         os.environ["STRATA_SOURCE"] = a.source
-    S.say("Strata on a Mac (Apple Silicon, Metal)")
+    S.say("Strata on a Mac (Metal)")
     data, elsewhere = S.data_folder_for(a)
     roots = [data, *elsewhere]
     models_root = Path(a.models_dir) if a.models_dir else data / "models"
@@ -373,7 +373,7 @@ def main(argv=None) -> int:
     # ---- 1. the Mac
     S.step(1, "checking your Mac")
     info = mac_info()
-    S.ok(f"{info['chip']}, {info['ram_gb']:.0f} GB unified memory, macOS {info['macos'] or '?'}")
+    S.ok(f"{gpu_line(info)}, macOS {info['macos'] or '?'}")
     problems = mac_problems(info)
     for p in problems:
         S.warn(p)
@@ -386,7 +386,7 @@ def main(argv=None) -> int:
 
     # ---- 2. the choices
     S.step(2, "your choices")
-    rec, notes = recommend_model(info["ram_gb"])
+    rec, notes = recommend_model(info["ram_gb"], info)
     for n in notes:
         S.warn(n)
     if a.model:
@@ -399,7 +399,7 @@ def main(argv=None) -> int:
                   + ("  (recommended)" if m in RECOMMENDED else "") + ("   <- default" if m == rec else ""))
         model = names[int(S.ask("Which size?", [str(i) for i in range(1, len(names) + 1)],
                                 str(names.index(rec) + 1), a.yes)) - 1]
-    for n in model_note(model, info["ram_gb"]):
+    for n in model_note(model, info["ram_gb"], info):
         S.warn(n)
     vision = a.vision or ("yes" if S.ask("Should the model also read images? (the image encoder, ~1 GB more)",
                                           ["y", "n"], "y", a.yes) == "y" else "no")   # on by default (strata_control/vision_reader.py)
@@ -505,7 +505,7 @@ def main(argv=None) -> int:
     prep_lock.unlink(missing_ok=True)
     mtp = (S.find_in(roots, "mtp/mtp-q2_0.gguf") or data / "mtp" / "mtp-q2_0.gguf").parent
     rt = mtp / "rt"
-    stream = streams(model, info["ram_gb"])
+    stream = streams(model, info["ram_gb"], info)
     use_mtp = stream_mtp(stream, info["ram_gb"])
     if stream and not use_mtp:
         S.ok("the experts will stream from the SSD: no MTP draft layer (one token per step is faster there); "

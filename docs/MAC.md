@@ -1,14 +1,68 @@
-# Strata on a Mac (Apple Silicon, Metal)
+# Strata on a Mac (Metal)
 
-This page is for people with an Apple Silicon Mac (M1 or newer). Strata runs there on its own Metal engine: the NVIDIA kernels
-are replaced by Metal ones (`metal/`), and the host code and the server are the PC's. Intel Macs cannot run it.
+This page is for an Apple Silicon Mac (M1 or newer) and for an Intel Mac with a discrete AMD card (a Radeon Pro). Strata runs
+there on its own Metal engine: the NVIDIA kernels are replaced by Metal ones (`metal/`), and the host code and the server are
+the PC's.
+
+Apple Silicon runs the ready-made engine (the app's `.dmg`, the Terminal's engine component, or `./setup.sh`). An Intel Mac
+builds the engine from source with `./setup.sh`: there is no ready-made Intel engine yet. [Intel Macs with an AMD
+card](#intel-macs-with-an-amd-card) lists what was checked on a MacBook Pro 2019.
 
 DeepSeek V4.1-Flash does not run on a Mac yet. It runs in the Terminal on NVIDIA RTX 30 and 50 cards and on the Radeon AI PRO
 R9700 ([MODELS.md](MODELS.md#deepseek-v41-flash)).
 
-> **On this page:** [What you need](#what-you-need) · [Install](#install) · [Defaults](#defaults-and-options) ·
-> [Gyro](#gyro-s-and-gyro-m-agentionais-trellis-experts) · [Measured](#measured-m5-max-128-gb) · [Limits](#limits-this-version) ·
-> [Switches](#switches) · [How it works](#how-it-works) · [History](#history--older-measurements)
+> **On this page:** [Intel Macs](#intel-macs-with-an-amd-card) · [What you need](#what-you-need) · [Install](#install) ·
+> [Defaults](#defaults-and-options) · [Gyro](#gyro-s-and-gyro-m-agentionais-trellis-experts) ·
+> [Measured](#measured-m5-max-128-gb) · [Limits](#limits-this-version) · [Switches](#switches) · [How it works](#how-it-works) ·
+> [History](#history--older-measurements)
+
+## Intel Macs with an AMD card
+
+**Measured on:** MacBook Pro 16,1 (2019), Intel Core i9-9980HK, 64 GB RAM, AMD Radeon Pro 5500M 8 GB, macOS 15.7.5, Xcode's
+Command Line Tools.
+
+- **Which card.** Metal 3 and a discrete AMD card. The integrated Intel GPU is not used: it shares the RAM and has no memory
+  budget of its own. The engine picks the discrete card itself; `STRATA_METAL_DEVICE=<name or index>` overrides it.
+- **The engine builds from source.** `./setup.sh` compiles it for x86_64 (about 15 minutes on the i9). The app's `.dmg` and
+  the Terminal's ready-made engine component are arm64 only, so an Intel Mac uses the source install.
+- **What Metal 3 lacks here, and what the engine does instead.** This card has no residency sets and no Metal 4. The engine
+  declares every buffer on each command buffer instead of a residency set, and prompts run through the decode windows (the
+  exact fallback, slower than the prompt kernels of an M5). Both happen automatically.
+- **The memory budget is the RAM, not the 8 GB of VRAM.** The engine's buffers are `storageModeShared`: they live in RAM, and
+  Metal allowed 40 GB of them on the 8 GB card (measured). The engine therefore plans against the RAM less what macOS keeps,
+  and the model's file is mapped in chunks of at most `maxBufferLength` (3.76 GB on this card).
+- **Speed.** The card reads the weights over PCIe: a strided read of a 37 GB mapped file measured 1.4 to 1.85 GB/s. Every
+  decode step reads the routed experts and the dense weights again. Measured on the synthetic model below: **1.6 tokens a
+  second** decode and 3.3 tokens a second on a 60-token prompt. A real pack's speed is not measured yet.
+
+**Checked on the 5500M:** the engine builds for x86_64 and serves requests end to end. The Metal runtime's own test
+(`runtime_hello`: copies, kernel graphs, a mapped host buffer and a 1000-dispatch window) passes; the decode GEMV kernels pass
+their parity test for every expert format (`gemv_parity`: Q2_0, IQ3_S, IQ4_NL, IQ4_XS, Q3_K, Q4_K, Q5_K, Q6_K, BF16, ...);
+the trellis (Gyro) CPU rows build with AVX2. The prompt kernels need Metal 4 and are not built on this card, so `mm_bench`,
+`mma_parity` and the prompt / matmul2d parity tests do not run here; prompts go through the decode windows instead.
+
+**The synthetic model, and what its numbers are.** A full model on this card was not downloaded (the smallest pack is a 66 GB
+download). The engine instead ran a synthetic Qwen3.8-Flash-Next Q2_0 model: the real file's metadata, tokenizer and
+1,224-tensor directory, with every tensor's bytes a hole in a sparse file (they read as zeros). The engine maps it like the
+real pack, fills the same expert arena and runs the same kernels; the answers are meaningless (the weights are zero), but the
+load path, the GPU work and the server are the real ones. The 37.6 GB shard and the 28.8 GB n-gram table cost 11 MB of disk
+together.
+
+> **Measured on:** MacBook Pro 16,1, i9-9980HK, 64 GB RAM, AMD Radeon Pro 5500M 8 GB, macOS 15.7.5, the synthetic Q2_0 model,
+> engine 0.1.50-metal, `--spec 2`, no draft layer, greedy, warm (the first request compiles the kernels it needs).
+
+| Result | Value |
+| --- | ---: |
+| Decode (16 tokens) | 1.6 tokens/s |
+| Prompt (60 tokens) | 3.3 tokens/s |
+| Expert arena | 7.8 GB, 5,626 slots (3 buffers, at most 4 × 3.76 GB) |
+| The process after the fill | 13.7 GB |
+| Start to ready (kernels compiled) | about 2 minutes |
+
+The arena is filled at 1.32 GB/s and wired with `mlock` (1.1 s for 7.8 GB). The first start compiles the Metal kernels on the
+CPU; only the expert formats the model uses are instantiated (`metal/kernels/moe.metal`, `STRATA_MOE_SELECT`), which takes the
+compile from about 11 minutes for all 16 formats to about 2 minutes for the four this pack uses. Later starts reuse the
+driver's compiled library: ready in under 30 seconds here.
 
 ## Quick start
 
@@ -25,16 +79,21 @@ Pictures are on by default in the app, the Terminal and the source build ([Limit
 Intel engines are unchanged.
 
 **Status:** new. It was measured on three Macs: an M5 Max with 128 GB, where the model stays in memory, and an M4 Mac mini with
-32 GB and an M1 Max with 34 GB, where the experts stream from the SSD. Other chips are untested, and reports help
+32 GB and an M1 Max with 34 GB, where the experts stream from the SSD. On a MacBook Pro 2019 with a Radeon Pro 5500M (8 GB) and
+64 GB of RAM the engine was built and served a synthetic Qwen3.8-Flash-Next model end to end ([the numbers](#intel-macs-with-an-amd-card));
+a real pack there is the next measurement. Other chips are untested, and reports help
 ([COMMUNITY_BENCHMARKS.md](COMMUNITY_BENCHMARKS.md)).
 
 ## What you need
 
-- **An Apple Silicon Mac (M1 or newer).**
-- **macOS 15 or newer.** The engine keeps its buffers resident through a residency set, which macOS 15 introduced.
+- **An Apple Silicon Mac (M1 or newer), or an Intel Mac with a Metal 3 AMD card** ([Intel Macs](#intel-macs-with-an-amd-card)).
+- **macOS 15 or newer.** The engine keeps its buffers resident through a residency set, which macOS 15 introduced (an Intel
+  Mac's AMD card has none: the engine declares them per command buffer instead).
 - **For a source build only:** Command Line Tools (`xcode-select --install`).
-- **Enough unified memory for the pack.** The GPU maps the model's main file and keeps it in memory while the model runs. Metal
-  lets one program keep about 3/4 of the memory resident (107.5 GB of 128 GB on the M5 Max).
+- **Enough memory for the pack.** The GPU maps the model's main file and keeps it in memory while the model runs. On Apple
+  Silicon the memory is unified and Metal lets one program keep about 3/4 of it resident (107.5 GB of 128 GB on the M5 Max).
+  On an Intel Mac's AMD card the file and the buffers live in the RAM (see the section above); the table below is the Apple
+  Silicon rule.
 
 | Pack | The file the GPU maps | Needs about (with prompt buffers, KV, draft layer) | Recommended from |
 | --- | --- | --- | --- |
@@ -82,7 +141,7 @@ For everyday use follow [the app or Terminal installation](INSTALL.md). The comm
 builds the Metal engine locally.
 
 ```sh
-git clone https://github.com/Niko1221/Strata && cd Strata
+git clone https://github.com/j4ckzh0u/Strata && cd Strata
 ./setup.sh                 # asks the size; --yes takes the recommended answers
 ```
 
@@ -228,6 +287,9 @@ from each other: top-1 agreement 95.4% against 95.8%, mean KL 0.0207 against 0.0
 - **Families:** the original Qwen3.8-Flash-Next, Unsloth's UD-Q4/Q5/Q6_K_XL and agentionai's Gyro-S are measured. Setup repacks
   Unsloth's shards into one file for the GPU; a Gyro file is used as it is. The Swift and Coder releases are not set up on Mac
   yet, and Qwen3.6 does not run on the Mac engine.
+- **Metal 3 cards (Intel Macs):** prompts run through the decode windows, because the prompt kernels need Metal 4; the M5's
+  layout switches are off. The card has no residency sets, so every command buffer declares the engine's buffers. Neither is
+  slower than the fallbacks the engine already has; both are automatic.
 
 ### Quality
 

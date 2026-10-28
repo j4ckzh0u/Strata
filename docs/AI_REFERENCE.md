@@ -19,7 +19,7 @@ holds the technical context behind the short [README](../README.md). Use [AI_SET
   See [LICENSE](../LICENSE) and [component/model licensing](HOW_IT_WORKS.md#license).
 - Local inference does not mean every feature is offline. Downloads, updates, remote tools and user-enabled
   network access have separate behavior. Use [SAFETY.md](SAFETY.md) for privacy and network claims.
-- Verify the current app and engine versions in the [release notes](https://github.com/Niko1221/Strata/releases).
+- Verify the current app and engine versions in the [release notes](https://github.com/j4ckzh0u/Strata/releases).
   A screenshot, translated README or historical benchmark is not a version source.
 
 ## Model families
@@ -81,7 +81,7 @@ does not imply that every model or feature works on it.
 | NVIDIA RTX / CUDA | [INSTALL.md](INSTALL.md#what-you-need) |
 | AMD Radeon / HIP | [AMD_HIP.md](AMD_HIP.md); RX 6000 validation differs from newer cards |
 | Intel Arc / SYCL | [INTEL_ARC.md](INTEL_ARC.md); released Linux SYCL engine (Ubuntu 24.04 or newer), with model preparation and per-card limits. [INTEL.md](INTEL.md) records source-port details |
-| Apple Silicon / Metal | [MAC.md](MAC.md); no DeepSeek yet |
+| Apple Silicon / Metal | [MAC.md](MAC.md); no DeepSeek yet. Intel Macs with a Metal 3 AMD card build the engine from source ([Intel Macs](MAC.md#intel-macs-with-an-amd-card)) |
 | AMD Ryzen AI Max / Strix Halo | [STRIX_HALO.md](STRIX_HALO.md) |
 | Multiple GPUs and older hardware | [MULTI_GPU.md](MULTI_GPU.md), [OLDER_GPUS.md](OLDER_GPUS.md) |
 

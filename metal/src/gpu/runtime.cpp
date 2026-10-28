@@ -21,9 +21,11 @@
 
 #include <sys/sysctl.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <map>
@@ -87,26 +89,81 @@ struct StreamImpl {
 
 namespace {
 
+// The GPU the engine runs on.  An Intel Mac can have two (an Intel iGPU and an AMD card): the system default can be the
+// integrated one, and Strata wants the card with a working set of its own.  STRATA_METAL_DEVICE picks one by name or
+// index (measurements).
+MTL::Device* choose_device() {
+    NS::Array* all = MTL::CopyAllDevices();
+    MTL::Device* pick = nullptr;
+    const char* want = std::getenv("STRATA_METAL_DEVICE");
+    if (all) {
+        const NS::UInteger n = all->count();
+        for (NS::UInteger i = 0; want && *want && i < n && !pick; ++i) {   // the explicit choice first
+            auto* d = (MTL::Device*) all->object(i);
+            const char* nm = d->name()->utf8String();
+            if (std::strstr(nm, want) || std::atoi(want) == (int) i) pick = d;
+        }
+        if (want && *want && !pick)
+            std::fprintf(stderr, "strata metal: STRATA_METAL_DEVICE=%s names no Metal device; using the best one\n", want);
+        for (NS::UInteger i = 0; !pick && i < n; ++i) {
+            auto* d = (MTL::Device*) all->object(i);
+            if (d->hasUnifiedMemory()) continue;   // a discrete GPU first: its memory is its own
+            if (!pick || d->recommendedMaxWorkingSetSize() > pick->recommendedMaxWorkingSetSize()) pick = d;
+        }
+        for (NS::UInteger i = 0; !pick && i < n; ++i) {
+            auto* d = (MTL::Device*) all->object(i);
+            if (!pick || d->recommendedMaxWorkingSetSize() > pick->recommendedMaxWorkingSetSize()) pick = d;
+        }
+    }
+    if (!pick) pick = MTL::CreateSystemDefaultDevice();
+    if (!pick) {
+        std::fprintf(stderr, "strata metal: no Metal device\n");
+        std::exit(2);
+    }
+    if (all && all->count() > 1)
+        std::fprintf(stderr, "strata metal: %u Metal devices; using %s (%.1f GB, %s)\n", (unsigned) all->count(),
+                     pick->name()->utf8String(), pick->recommendedMaxWorkingSetSize() / 1e9,
+                     pick->hasUnifiedMemory() ? "unified memory" : "discrete");
+    return pick;
+}
+
 struct Runtime {
     MTL::Device* dev = nullptr;
-    MTL::ResidencySet* rs = nullptr;
+    MTL::ResidencySet* rs = nullptr;   // null on GPUs without residency sets (Intel and AMD Macs): see declare_all
     std::mutex mu;
     std::map<uint64_t, Alloc> by_gpu;   // gpuAddress -> allocation
     std::map<uintptr_t, uint64_t> by_cpu;   // contents() -> gpuAddress
+    std::vector<MTL::Resource*> live;   // every buffer for the encoders' useResources (kept without a residency set)
     StreamImpl* legacy = nullptr;
     std::map<std::string, MTL::ComputePipelineState*> pipes;
     std::map<std::string, MTL::Library*> libs;
     metal::Stats stats;
 };
 
+Runtime& rt();
+
+// Without a residency set, Metal cannot see the buffers the engine passes as raw gpuAddresses in setBytes arguments, so
+// each compute encoder is told about every live allocation (MTLCommandEncoder::useResources).  On the Intel and AMD Macs
+// tested this is what keeps them resident for the command buffer.
+void declare_all(MTL::ComputeCommandEncoder* enc) {
+    Runtime& r = rt();
+    if (r.rs) return;
+    std::lock_guard<std::mutex> lk(r.mu);
+    if (!r.live.empty())
+        enc->useResources(r.live.data(), (NS::UInteger) r.live.size(), MTL::ResourceUsageRead | MTL::ResourceUsageWrite);
+}
+
 Runtime& rt() {
     static Runtime* r = [] {
         auto* x = new Runtime;
-        x->dev = MTL::CreateSystemDefaultDevice();
+        x->dev = choose_device();
         NS::Error* e = nullptr;
         MTL::ResidencySetDescriptor* d = MTL::ResidencySetDescriptor::alloc()->init();
         x->rs = x->dev->newResidencySet(d, &e);
         d->release();
+        if (!x->rs)
+            std::fprintf(stderr, "strata metal: %s has no residency sets (a Mac without Apple Silicon): every encoder "
+                                 "declares its buffers with useResources instead\n", x->dev->name()->utf8String());
         return x;
     }();
     return *r;
@@ -121,7 +178,7 @@ Error fail(Error e) {
 StreamImpl* make_stream() {
     auto* s = new StreamImpl;
     s->q = rt().dev->newCommandQueue();
-    s->q->addResidencySet(rt().rs);
+    if (rt().rs) s->q->addResidencySet(rt().rs);
     s->tl = rt().dev->newSharedEvent();
     s->tl->setSignaledValue(0);
     return s;
@@ -166,7 +223,10 @@ void end_encoder(StreamImpl* s) {
     if (s->enc) { s->enc->endEncoding(); s->enc = nullptr; }
 }
 MTL::ComputeCommandEncoder* encoder(StreamImpl* s) {
-    if (!s->enc) s->enc = open_cb(s)->computeCommandEncoder();   // serial dispatch: each dispatch sees the last
+    if (!s->enc) {
+        s->enc = open_cb(s)->computeCommandEncoder();   // serial dispatch: each dispatch sees the last
+        declare_all(s->enc);
+    }
     return s->enc;
 }
 void flush(StreamImpl* s) {
@@ -286,8 +346,11 @@ Error new_alloc(void** p, size_t bytes, bool host) {
         std::lock_guard<std::mutex> lk(r.mu);
         r.by_gpu[a.gpu] = a;
         r.by_cpu[(uintptr_t) a.cpu] = a.gpu;
-        r.rs->addAllocation(b);
-        r.rs->commit();
+        r.live.push_back(b);
+        if (r.rs) {
+            r.rs->addAllocation(b);
+            r.rs->commit();
+        }
     }
     *p = host ? (void*) a.cpu : (void*) (uintptr_t) a.gpu;
     return kSuccess;
@@ -305,8 +368,11 @@ Error free_alloc(void* p) {
     const uint64_t g = a->gpu;
     r.by_cpu.erase((uintptr_t) a->cpu);
     r.by_gpu.erase(g);
-    r.rs->removeAllocation(b);
-    r.rs->commit();
+    r.live.erase(std::remove(r.live.begin(), r.live.end(), (MTL::Resource*) b), r.live.end());
+    if (r.rs) {
+        r.rs->removeAllocation(b);
+        r.rs->commit();
+    }
     b->release();
     return kSuccess;
 }
@@ -331,12 +397,13 @@ uint64_t purge_device_allocations(size_t min_bytes) {
     uint64_t n = 0;
     for (auto& [gpu, a] : r.by_gpu) {
         if (a.host || a.purged || a.bytes < min_bytes) continue;
-        r.rs->removeAllocation(a.buf);
+        if (r.rs) r.rs->removeAllocation(a.buf);
+        r.live.erase(std::remove(r.live.begin(), r.live.end(), (MTL::Resource*) a.buf), r.live.end());
         a.buf->setPurgeableState(MTL::PurgeableStateEmpty);
         a.purged = true;
         n += a.bytes;
     }
-    r.rs->commit();
+    if (r.rs) r.rs->commit();
     return n;
 }
 
@@ -373,7 +440,7 @@ Error mem_get_info(size_t* free_b, size_t* total_b) {
     *free_b = (size_t) (used < budget ? budget - used : 0);
     return kSuccess;
 }
-Error device_integrated(int* v, int) { *v = 1; return kSuccess; }
+Error device_integrated(int* v, int) { *v = rt().dev->hasUnifiedMemory() ? 1 : 0; return kSuccess; }
 Error device_sm_count(int* v, int) { *v = 0; return fail(kErrorUnsupported); }   // Apple reports no core count
 Error device_clock_khz(int* v, int) { *v = 0; return fail(kErrorUnsupported); }
 Error runtime_version(int* v) { *v = 0; return kSuccess; }
@@ -384,8 +451,11 @@ Error get_device_properties(DeviceProp* p, int dev) {
     *p = DeviceProp{};
     MTL::Device* d = rt().dev;
     std::snprintf(p->name, sizeof p->name, "%s", d->name()->utf8String());
-    std::snprintf(p->gcnArchName, sizeof p->gcnArchName, "%s", d->supportsFamily(MTL::GPUFamilyApple10) ? "apple10" : "apple9-or-older");
-    p->warpSize = 32;   // the SIMD-group width of every Apple GPU
+    // "mac2": an AMD or Intel GPU on an Intel Mac (no Apple GPU families, and none of the Apple-only kernels).
+    const char* arch = d->supportsFamily(MTL::GPUFamilyApple10) ? "apple10"
+                     : d->supportsFamily(MTL::GPUFamilyApple7) ? "apple9-or-older" : "mac2";
+    std::snprintf(p->gcnArchName, sizeof p->gcnArchName, "%s", arch);
+    p->warpSize = 32;   // the SIMD-group width of every Metal GPU (32 on Apple and on AMD)
     p->totalGlobalMem = (size_t) d->recommendedMaxWorkingSetSize();
     return kSuccess;
 }
@@ -415,8 +485,11 @@ Error host_register(void* p, size_t bytes, unsigned) {
     std::lock_guard<std::mutex> lk(r.mu);
     r.by_gpu[a.gpu] = a;
     r.by_cpu[(uintptr_t) a.cpu] = a.gpu;
-    r.rs->addAllocation(b);
-    r.rs->commit();
+    r.live.push_back(b);
+    if (r.rs) {
+        r.rs->addAllocation(b);
+        r.rs->commit();
+    }
     return kSuccess;
 }
 Error host_unregister(void* p) { return free_alloc(p); }
@@ -614,7 +687,7 @@ Error dispatch(Stream st, MTL::ComputePipelineState* p, const void* args, size_t
                          "strata metal: the kernel %s can run at most %lu threads per threadgroup on this GPU (%s), but the "
                          "launch asks for %lu.\nMetal skips such a dispatch without any error, so every answer would be "
                          "wrong; stopping here instead.  Please report this (the GPU, macOS version and this line) at "
-                         "https://github.com/Niko1221/Strata/issues .  (#2323)\n",
+                         "https://github.com/j4ckzh0u/Strata/issues .  (#2323)\n",
                          name.c_str(), (unsigned long) p->maxTotalThreadsPerThreadgroup(),
                          r.dev->name()->utf8String(), (unsigned long) want);
             std::fflush(stderr);

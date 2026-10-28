@@ -80,6 +80,7 @@ public:
     std::string device_name() const;
     bool has_family_apple(int n) const;          // MTLGPUFamilyApple<n>
     bool supports_metal4() const;
+    bool unified_memory() const;                 // false on an Intel Mac's AMD card: its memory is its own
     uint64_t recommended_working_set() const;
     uint64_t max_buffer_length() const;
     uint64_t allocated() const { return allocated_; }   // bytes of alloc() + wrap() buffers so far

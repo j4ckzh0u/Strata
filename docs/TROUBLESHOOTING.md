@@ -39,14 +39,15 @@ report the missing combination.
 **An update says it succeeded but `strata --version` is still old.**
 The Terminal switches to the updated Control on the next command, so run `strata --version` again. If it is still old,
 run the one-line installer once more; it keeps models and settings. The app, Control and engine have separate version
-numbers; see [updating](INSTALL.md#updating) and the [release notes](https://github.com/Niko1221/Strata/releases).
+numbers; see [updating](INSTALL.md#updating) and the [release notes](https://github.com/j4ckzh0u/Strata/releases).
 
 **A new engine misbehaves after an update.**
 Stop the model, then use the app's rollback control or `strata components rollback`. Source-checkout engines use a
 separate rollback workflow, `python setup.py --rollback-engine`, described in [source setup](SOURCE_INSTALL.md).
 
 **The Mac app cannot be opened.**
-Check that the download is for Apple Silicon and that macOS is 15 or newer. Follow
+Check that the download is for Apple Silicon (the app package) and that macOS is 15 or newer; an Intel Mac builds the engine
+from source instead ([Intel Macs](MAC.md#intel-macs-with-an-amd-card)). Follow
 [Mac installation](MAC.md#the-desktop-app-and-strata-launch-on-a-mac). A warning alone does not establish that a file
 is safe or intact: verify the download source and release before changing quarantine settings. Release signing and
 test-build handling are described in [Mac packaging](../packaging/mac/README.md).

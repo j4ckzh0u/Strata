@@ -1060,10 +1060,18 @@ class Strata:
         ram = round(float(info.get("ram_gb") or hw.get("ram_gb") or 0.0), 1)
         hw["ram_gb"] = ram
         hw["cpu"] = {"name": info["chip"], "cores": os.cpu_count(), "avx2": None, "avx512": None}
-        # The graphics memory IS the RAM here: vram_gb stays 0 so nothing is counted twice (the pages that fit RAM + VRAM add them up).
-        hw["gpus"] = [{"index": 0, "name": info["chip"], "vendor": "apple", "vram_gb": 0.0, "unified_gb": ram, "arch": "apple-gpu",
-                       "problem": problems[0] if problems else None, "usable": not problems}]
-        hw["mac"] = {"chip": info["chip"], "macos": info.get("macos"), "unified_gb": ram}
+        # The Metal engine drives one GPU: an Apple Silicon chip (the memory is the RAM's) or an Intel Mac's discrete card.
+        g = info.get("gpu") or {}
+        if g and not info.get("arm64"):
+            hw["gpus"] = [{"index": 0, "name": g.get("name") or "Graphics", "vendor": "amd",
+                           "vram_gb": float(g.get("vram_gb") or 0), "arch": "mac2",
+                           "problem": problems[0] if problems else None, "usable": not problems}]
+        else:
+            # The graphics memory IS the RAM here: vram_gb stays 0 so nothing is counted twice (the pages that fit RAM + VRAM add them up).
+            hw["gpus"] = [{"index": 0, "name": info["chip"], "vendor": "apple", "vram_gb": 0.0, "unified_gb": ram,
+                           "arch": "apple-gpu", "problem": problems[0] if problems else None, "usable": not problems}]
+        hw["mac"] = {"chip": info["chip"], "macos": info.get("macos"), "unified_gb": ram,
+                     "discrete": bool(info.get("discrete"))}
         hw["nvidia_smi"] = False
         return hw
 
@@ -1074,11 +1082,11 @@ class Strata:
         mf = self.mac()
         return [m for m, d in mf.MAC_MODELS.items() if d.get("family", "qwen") == family and m in models] if mf else []
 
-    def _mac_verdict(self, model: str, ram: float) -> str:
+    def _mac_verdict(self, model: str, ram: float, info: dict | None = None) -> str:
         mf = self.mac()
         if ram < mf.MIN_STREAM_RAM_GB:
             return "does not fit"
-        if not mf.streams(model, ram):
+        if not mf.streams(model, ram, info):
             return "fits"
         speed = mf.STREAM_MEASURED.get(model)
         if speed:
@@ -1088,23 +1096,25 @@ class Strata:
     def _mac_recommend(self, hw: dict, models: dict, families: dict) -> dict:
         mf = self.mac()
         ram = float(hw.get("ram_gb") or 0)
+        info = {"discrete": bool((hw.get("mac") or {}).get("discrete"))}
+        mem = "RAM" if info["discrete"] else "unified memory"
         usable = [g for g in hw.get("gpus", []) if g.get("usable")]
         if not mf or not usable:
             why = (hw.get("gpus") or [{}])[0].get("problem") or "this Mac cannot run the Metal engine"
             return {"family": None, "model": None, "why": why}
         if ram < mf.MIN_STREAM_RAM_GB:
             return {"family": None, "model": None,
-                    "why": f"{ram:.0f} GB of unified memory: Strata needs {mf.MIN_STREAM_RAM_GB:.0f} GB or more on a Mac (32 GB or more is what it was tested on)"}
-        model, notes = mf.recommend_model(ram)
+                    "why": f"{ram:.0f} GB of {mem}: Strata needs {mf.MIN_STREAM_RAM_GB:.0f} GB or more on a Mac (32 GB or more is what it was tested on)"}
+        model, notes = mf.recommend_model(ram, info)
         notes = [n for n in notes if "UD-Q4_K_XL" not in n]          # the app does not offer the Unsloth files yet
         if model not in self._mac_sizes(models):
             model = "Q2_0"
-        if mf.streams(model, ram):
+        if mf.streams(model, ram, info):
             speed = mf.STREAM_MEASURED.get(model)
-            why = (f"{ram:.0f} GB of unified memory: no size fits whole, so {model}'s experts are read from the SSD as it answers"
+            why = (f"{ram:.0f} GB of {mem}: no size fits whole, so {model}'s experts are read from the SSD as it answers"
                    + (f" ({speed} measured on a 32 GB Mac mini)" if speed else ""))
         else:
-            why = f"{ram:.0f} GB of unified memory: {model} stays in memory (the best size that does)"
+            why = f"{ram:.0f} GB of {mem}: {model} stays in memory (the best size that does)"
         ctx = mf.recommend_context(ram)
         return {"family": "qwen", "model": model, "title": families["qwen"]["title"] + " " + model, "context": ctx,
                 "backend": "metal", "gpu": {k: usable[0].get(k) for k in ("index", "name", "vram_gb")},
@@ -1114,6 +1124,7 @@ class Strata:
     def _mac_model_table(self, hw: dict) -> list:
         models, families, _ctx, _src = self.tables()
         ram = float(hw.get("ram_gb") or 0)
+        info = {"discrete": bool((hw.get("mac") or {}).get("discrete"))}
         have = {c.stem[len("strata-"):] for c in self.configs()}
         out = []
         for family in ("qwen", "gyro"):                # Gyro after the regular sizes, as on a PC: never the default
@@ -1128,7 +1139,7 @@ class Strata:
                               "images": d.get("vision", fd.get("vision", True)) is not False,   # the Mac engine carries the picture reader (Metal)
                               "ram_needed_gb": d["ram_gb"], "experts_gb": d.get("arena_gb"), "mem_total": False,
                               "memory_gb": round(float(d.get("arena_gb") or d["ram_gb"]) + 1.0, 1),
-                              "on_this_pc": self._mac_verdict(m, ram) if ram else None, "installed": tag in have, "id": tag})
+                              "on_this_pc": self._mac_verdict(m, ram, info) if ram else None, "installed": tag in have, "id": tag})
             if sizes:
                 out.append({"family": family, "title": fd["title"], "about": fd.get("about"), "experimental": False,
                             "images": any(x["images"] for x in sizes), "sizes": sizes})

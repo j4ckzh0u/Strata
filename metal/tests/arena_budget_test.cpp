@@ -75,6 +75,21 @@ int main() {
     ArenaMem busy = held;
     busy.available = 60 * kGB;
     check(arena_budget(busy) < arena_budget(held) && std::fabs(arena_budget(busy) - (60.0 - 20.61 - 0.5) * kGB) < 0.1 * kGB, "a program already holds memory: the free-memory rule binds (38.9 GB)", arena_budget(busy));
+    // an Intel Mac with a Radeon Pro 5500M: 64 GiB of RAM (68.7 GB), an 8.6 GB working set, and buffers whose total Metal
+    // lets pass that working set (measured: 40 GB of storageModeShared buffers on the 8 GB card).  The RAM is the budget.
+    ArenaMem d{68.7 * kGB, 8.6 * kGB, 0.3 * kGB, 50.0 * kGB};
+    d.discrete = true;
+    check(std::fabs(footprint_cap(d) - (68.7 - 0.40 * 68.7) * kGB) < 1e6,
+          "5500M: the footprint cap is the RAM less 40% (41.2 GB), not the 8.6 GB working set", footprint_cap(d));
+    check(std::fabs(resident_cap(d) - (68.7 - 0.30 * 68.7) * kGB) < 1e6,
+          "5500M: a resident pack may hold the RAM less 30% (48.1 GB)", resident_cap(d));
+    check(footprint_cap(d) > 8.6 * kGB * 4, "5500M: the working set is not the cap (40 GB of buffers were measured)", footprint_cap(d));
+    check(std::fabs(arena_budget(d) - (50.0 - 10.305 - 0.5) * kGB) < 0.2 * kGB,
+          "5500M: free memory bounds the arena (39.2 GB), not the working set", arena_budget(d));
+    check(!resident_fits(68.7 * kGB, 8.6 * kGB, 37.6 * kGB, 12.0 * kGB, true),
+          "5500M: Q2_0 + 12 GB is over the 48.1 GB cap (49.6): it streams", 49.6 * kGB);
+    check(!resident_fits(68.7 * kGB, 8.6 * kGB, 37.6 * kGB, 12.0 * kGB, false),
+          "the same Mac judged as unified memory: it streams too (the 8.6 GB working set)", 0);
     // the explicit arena is kept (never forced) but the plan says it is over the cap
     ArenaMem ex = q6;
     ex.arena_gb = 90.0;
