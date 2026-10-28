@@ -65,7 +65,7 @@ export function nvidiaDriverVersion() {
 }
 
 /** Where the builds are published; the wrong-make sentence points here. */
-export const RELEASES_URL = 'https://github.com/Niko1221/Strata/releases';
+export const RELEASES_URL = 'https://github.com/j4ckzh0u/Strata/releases';
 
 /** The PCI vendor ids (`10de`, `1002`, `8086`) of the Windows display adapters; empty off Windows or when the registry cannot be read. */
 export function windowsDisplayVendors({ platform = process.platform, run = execFileSync } = {}) {

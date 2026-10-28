@@ -15,7 +15,7 @@ PRO R9700 ([MODELS.md](MODELS.md#deepseek-v41-flash)).
 
 ## Quick start
 
-Use the [current release](https://github.com/Niko1221/Strata/releases/latest). You do not need to build ROCm for a packaged install.
+Use the [current release](https://github.com/j4ckzh0u/Strata/releases/latest). You do not need to build ROCm for a packaged install.
 
 | System | What to install | Engine variant |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ llama.cpp's `ggml` sources are pinned by this repository, and CMake fetches the 
 `STRATA_GGML_DIR` at a checkout of exactly that revision.
 
 ```sh
-git clone https://github.com/Niko1221/Strata.git && cd Strata
+git clone https://github.com/j4ckzh0u/Strata.git && cd Strata
 cmake -S . -B build-halo -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DSTRATA_ENABLE_HIP=ON -DSTRATA_ENABLE_CUDA=OFF -DSTRATA_PREFILL_MMQ=ON \
   -DCMAKE_HIP_ARCHITECTURES=gfx1151 \

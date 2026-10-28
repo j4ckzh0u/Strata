@@ -132,7 +132,7 @@ reused. The Monitor shows the card's load, VRAM, temperature and power from Linu
 ## Windows
 
 Install the [app](INSTALL.md) (`Strata-0.2.6-windows-x64-setup.exe` from the
-[release page](https://github.com/Niko1221/Strata/releases/latest); it downloads the engine for the card), or
+[release page](https://github.com/j4ckzh0u/Strata/releases/latest); it downloads the engine for the card), or
 install the [Terminal](INSTALL.md#the-terminal) and run `strata launch`. You need Windows 10 or 11 (64-bit), a supported card
 and a current AMD driver. No ROCm or HIP SDK, no compiler, no admin rights. `START-HERE.bat --backend hip` is a
 source-checkout option for developers, not a way to start the released app.
